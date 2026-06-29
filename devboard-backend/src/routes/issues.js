@@ -200,7 +200,60 @@ router.patch('/:issueId', requireMember, async (req, res) => {
   }
 });
 
+// PATCH /api/projects/:id/issues/:issueId/status — transition issue status
+router.patch('/:issueId/status', requireMember, async (req, res) => {
+  const { id, issueId } = req.params;
+  const { status } = req.body;
 
+  // 1. Validate status value
+  const validStatuses = ['todo', 'in_progress', 'done'];
+  if (!status || !validStatuses.includes(status)) {
+    return res.status(400).json({ 
+      error: 'Invalid status. Must be todo, in_progress, or done' 
+    });
+  }
+
+  try {
+    // 2. Get current status
+    const issueResult = await pool.query(
+      'SELECT * FROM issues WHERE id = $1 AND project_id = $2',
+      [issueId, id]
+    );
+
+    if (issueResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Issue not found' });
+    }
+
+    const currentStatus = issueResult.rows[0].status;
+
+    // 3. Validate transition
+    const validTransitions = {
+      todo: ['in_progress'],
+      in_progress: ['done', 'todo'],
+      done: ['todo']
+    };
+
+    if (!validTransitions[currentStatus].includes(status)) {
+      return res.status(400).json({ 
+        error: `Cannot transition from ${currentStatus} to ${status}` 
+      });
+    }
+
+    // 4. Update status
+    const result = await pool.query(
+      'UPDATE issues SET status = $1 WHERE id = $2 AND project_id = $3 RETURNING *',
+      [status, issueId, id]
+    );
+
+    res.json({
+      message: `Issue status updated to ${status}`,
+      issue: result.rows[0]
+    });
+  } catch (err) {
+    console.error('Status transition error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 // DELETE /api/projects/:id/issues/:issueId — delete an issue
 router.delete('/:issueId', requireMember, async (req, res) => {

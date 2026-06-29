@@ -39,11 +39,15 @@ router.post('/', async (req, res) => {
   }
 });
 
-// GET /api/projects — get all projects owned by logged in user
+// GET /api/projects — get all projects user belongs to (owner or member)
 router.get('/', async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT * FROM projects WHERE owner_id = $1 ORDER BY created_at DESC',
+      `SELECT p.*, pm.role
+       FROM projects p
+       JOIN project_members pm ON p.id = pm.project_id
+       WHERE pm.user_id = $1
+       ORDER BY p.created_at DESC`,
       [req.user.userId]
     );
 
@@ -54,19 +58,28 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /api/projects/:id — get a single project
+// GET /api/projects/:id — get a single project (members can view)
 router.get('/:id', async (req, res) => {
   const { id } = req.params;
 
   try {
-    const result = await pool.query(
-      'SELECT * FROM projects WHERE id = $1 AND owner_id = $2',
+    // Check if user is a member of this project
+    const memberCheck = await pool.query(
+      'SELECT role FROM project_members WHERE project_id = $1 AND user_id = $2',
       [id, req.user.userId]
     );
 
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Project not found' });
+    if (memberCheck.rows.length === 0) {
+      return res.status(403).json({ error: 'You are not a member of this project' });
     }
+
+    const result = await pool.query(
+      `SELECT p.*, pm.role as your_role
+       FROM projects p
+       JOIN project_members pm ON p.id = pm.project_id
+       WHERE p.id = $1 AND pm.user_id = $2`,
+      [id, req.user.userId]
+    );
 
     res.json({ project: result.rows[0] });
   } catch (err) {
