@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
+import { DragDropContext, Droppable } from '@hello-pangea/dnd';
 import api from '../api/axios';
 import Navbar from '../components/Navbar';
 import IssueCard from '../components/IssueCard';
 import CreateIssueModal from '../components/CreateIssueModal';
 import AddMemberModal from '../components/AddMemberModal';
 import MembersBar from '../components/MembersBar';
+import IssueDetailModal from '../components/IssueDetailModal';
 
 const columns = [
   { key: 'todo', label: 'Todo' },
@@ -19,8 +21,9 @@ const ProjectDetail = () => {
   const [issues, setIssues] = useState([]);
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
+  const [showIssueModal, setShowIssueModal] = useState(false);
   const [showMemberModal, setShowMemberModal] = useState(false);
+  const [selectedIssue, setSelectedIssue] = useState(null);
   const [error, setError] = useState('');
 
   const fetchData = async () => {
@@ -44,7 +47,15 @@ const ProjectDetail = () => {
     fetchData();
   }, [id]);
 
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(''), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [error]);
+
   const handleCreateIssue = async (formData) => {
+    setError(''); 
     try {
       const payload = {
         ...formData,
@@ -52,7 +63,7 @@ const ProjectDetail = () => {
         due_date: formData.due_date || null,
       };
       await api.post(`/api/projects/${id}/issues`, payload);
-      setShowModal(false);
+      setShowIssueModal(false);
       fetchData();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to create issue');
@@ -60,6 +71,7 @@ const ProjectDetail = () => {
   };
 
   const handleInviteMember = async (email) => {
+    setError(''); 
     try {
       await api.post(`/api/projects/${id}/members`, { email });
       fetchData();
@@ -70,13 +82,71 @@ const ProjectDetail = () => {
   };
 
   const handleRemoveMember = async (userId) => {
+    setError(''); 
     if (!window.confirm('Remove this member from the project?')) return;
-
     try {
       await api.delete(`/api/projects/${id}/members/${userId}`);
       fetchData();
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to remove member');
+    }
+  };
+
+  const handleUpdateIssue = async (issueId, formData) => {
+    setError(''); 
+    try {
+      const payload = {
+        ...formData,
+        assignee_id: formData.assignee_id || null,
+        due_date: formData.due_date || null,
+      };
+      await api.patch(`/api/projects/${id}/issues/${issueId}`, payload);
+      setSelectedIssue(null);
+      fetchData();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to update issue');
+    }
+  };
+
+  const handleDeleteIssue = async (issueId) => {
+    setError(''); 
+    try {
+      await api.delete(`/api/projects/${id}/issues/${issueId}`);
+      setSelectedIssue(null);
+      fetchData();
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to delete issue');
+    }
+  };
+
+  const handleDragEnd = async (result) => {
+    const { source, destination, draggableId } = result;
+
+    // Dropped outside any column
+    if (!destination) return;
+
+    // Dropped in the same place
+    if (source.droppableId === destination.droppableId) return;
+
+    setError(''); 
+
+    const newStatus = destination.droppableId;
+
+    // Optimistic UI update — move the card instantly
+    setIssues((prev) =>
+      prev.map((issue) =>
+        issue.id.toString() === draggableId ? { ...issue, status: newStatus } : issue
+      )
+    );
+
+    try {
+      await api.patch(`/api/projects/${id}/issues/${draggableId}/status`, {
+        status: newStatus,
+      });
+    } catch (err) {
+      // Revert on failure (e.g. invalid transition)
+      setError(err.response?.data?.error || 'Invalid status transition');
+      fetchData();
     }
   };
 
@@ -103,7 +173,7 @@ const ProjectDetail = () => {
             <h1 style={styles.title}>{project?.name}</h1>
             <p style={styles.subtitle}>{project?.description || 'No description'}</p>
           </div>
-          <button style={styles.createBtn} onClick={() => setShowModal(true)}>
+          <button style={styles.createBtn} onClick={() => setShowIssueModal(true)}>
             + New Issue
           </button>
         </div>
@@ -117,35 +187,54 @@ const ProjectDetail = () => {
 
         {error && <div style={styles.error}>{error}</div>}
 
-        <div style={styles.board}>
-          {columns.map((col) => {
-            const colIssues = getIssuesByStatus(col.key);
-            return (
-              <div key={col.key} style={styles.column}>
-                <div style={styles.columnHeader}>
-                  <span style={styles.columnTitle}>{col.label}</span>
-                  <span style={styles.columnCount}>{colIssues.length}</span>
-                </div>
+        <DragDropContext onDragEnd={handleDragEnd}>
+          <div style={styles.board}>
+            {columns.map((col) => {
+              const colIssues = getIssuesByStatus(col.key);
+              return (
+                <Droppable droppableId={col.key} key={col.key}>
+                  {(provided, snapshot) => (
+                    <div
+                      ref={provided.innerRef}
+                      {...provided.droppableProps}
+                      style={{
+                        ...styles.column,
+                        backgroundColor: snapshot.isDraggingOver ? '#e5e7eb' : '#f1f3f5',
+                      }}
+                    >
+                      <div style={styles.columnHeader}>
+                        <span style={styles.columnTitle}>{col.label}</span>
+                        <span style={styles.columnCount}>{colIssues.length}</span>
+                      </div>
 
-                <div style={styles.columnBody}>
-                  {colIssues.length === 0 ? (
-                    <p style={styles.emptyCol}>No issues</p>
-                  ) : (
-                    colIssues.map((issue) => (
-                      <IssueCard key={issue.id} issue={issue} onClick={() => {}} />
-                    ))
+                      <div style={styles.columnBody}>
+                        {colIssues.length === 0 ? (
+                          <p style={styles.emptyCol}>No issues</p>
+                        ) : (
+                          colIssues.map((issue, index) => (
+                            <IssueCard
+                              key={issue.id}
+                              issue={issue}
+                              index={index}
+                              onClick={setSelectedIssue}
+                            />
+                          ))
+                        )}
+                        {provided.placeholder}
+                      </div>
+                    </div>
                   )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+                </Droppable>
+              );
+            })}
+          </div>
+        </DragDropContext>
       </div>
 
-      {showModal && (
+      {showIssueModal && (
         <CreateIssueModal
           members={members}
-          onClose={() => setShowModal(false)}
+          onClose={() => setShowIssueModal(false)}
           onCreate={handleCreateIssue}
         />
       )}
@@ -156,7 +245,16 @@ const ProjectDetail = () => {
           onInvite={handleInviteMember}
         />
       )}
-      
+
+      {selectedIssue && (
+        <IssueDetailModal
+          issue={selectedIssue}
+          members={members}
+          onClose={() => setSelectedIssue(null)}
+          onUpdate={handleUpdateIssue}
+          onDelete={handleDeleteIssue}
+        />
+      )}
     </div>
   );
 };
@@ -168,7 +266,7 @@ const styles = {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: '2rem',
+    marginBottom: '1.5rem',
   },
   title: { fontSize: '26px', fontWeight: '700', margin: '0 0 4px' },
   subtitle: { color: '#666', fontSize: '14px', margin: 0 },
@@ -196,10 +294,10 @@ const styles = {
     gap: '16px',
   },
   column: {
-    backgroundColor: '#f1f3f5',
     borderRadius: '8px',
     padding: '12px',
     minHeight: '400px',
+    transition: 'background-color 0.2s',
   },
   columnHeader: {
     display: 'flex',
@@ -216,7 +314,7 @@ const styles = {
     padding: '2px 8px',
     borderRadius: '999px',
   },
-  columnBody: { maxHeight: '600px', overflowY: 'auto' },
+  columnBody: { minHeight: '300px' },
   emptyCol: { fontSize: '13px', color: '#9ca3af', textAlign: 'center', padding: '2rem 0' },
 };
 
